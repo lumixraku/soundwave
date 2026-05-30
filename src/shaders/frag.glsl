@@ -43,15 +43,15 @@ void main() {
 
   float t = clamp(audioEnergy, 0.0, 1.0);
 
-  vec3 col1 = vec3(0.2, 0.6, 1.0);
-  vec3 col2 = vec3(0.7, 0.2, 0.9);
-  vec3 col3 = vec3(1.0, 0.35, 0.6);
+  vec3 col1 = vec3(0.4, 0.753, 0.694);
+  vec3 col2 = vec3(0.149, 0.451, 0.38);
+  vec3 col3 = vec3(0.847, 0.953, 0.863);
 
   vec3 color = mix(col1, col2, smoothstep(0.15, 0.5, t));
   color = mix(color, col3, smoothstep(0.5, 0.9, t));
 
   float alpha = clamp(core + glow, 0.0, 1.0);
 
-  vec3 bg = vec3(0.02, 0.02, 0.06);
+  vec3 bg = vec3(0.04, 0.06, 0.055);
   fragColor = vec4(mix(bg, color, alpha), 1.0);
 }
