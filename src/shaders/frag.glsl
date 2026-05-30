@@ -6,6 +6,7 @@ uniform sampler2D u_audioData;
 uniform float u_intensity;
 uniform float u_pixelRatio;
 uniform vec2 u_resolution;
+uniform vec2 u_mouse;
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -33,13 +34,31 @@ void main() {
   distortion += sin(theta * 7.0 - u_time * 0.8) * audio * 0.03 * u_intensity;
 
   float radius = baseRadius + distortion * 0.15;
+  float mouseCursorDist = length(u_mouse);
+  float cursorToRingDist = abs(mouseCursorDist - radius);
   float rd = d - radius;
+
+  if (mouseCursorDist > 0.01) {
+    vec2 fragToMouse = uv - u_mouse;
+    float mouseDist = length(fragToMouse);
+    float repelRadius = 0.28;
+    float activation = smoothstep(0.25, 0.02, cursorToRingDist);
+
+    if (mouseDist < repelRadius && activation > 0.001) {
+      vec2 pushDir = fragToMouse / max(mouseDist, 0.001);
+      float pushAmt = pow(1.0 - mouseDist / repelRadius, 2.0) * 0.28 * activation;
+      rd = length(uv - pushDir * pushAmt) - radius;
+    }
+  }
+
+  float mouseProximity = smoothstep(0.35, 0.0, length(uv - u_mouse));
+  float glowBoost = mouseProximity * 0.5;
 
   float ringWidth = 0.005 * u_pixelRatio;
   float glowWidth = 0.035 * u_pixelRatio;
 
   float core = exp(-abs(rd) / ringWidth);
-  float glow = exp(-abs(rd) / glowWidth) * 0.5;
+  float glow = exp(-abs(rd) / glowWidth) * (0.5 + glowBoost);
 
   float t = clamp(audioEnergy, 0.0, 1.0);
 

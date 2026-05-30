@@ -35,6 +35,7 @@ export default function CircularWaveform({ getAudioData }: Props) {
   const rafRef = useRef(0)
   const smoothedAudioRef = useRef<Float32Array | null>(null)
   const smoothedIntensityRef = useRef(0)
+  const mouseRef = useRef({ x: -999, y: -999 })
 
   const render = useCallback(() => {
     const canvas = canvasRef.current!
@@ -74,6 +75,7 @@ export default function CircularWaveform({ getAudioData }: Props) {
     const uIntensity = gl.getUniformLocation(program, 'u_intensity')
     const uPixelRatio = gl.getUniformLocation(program, 'u_pixelRatio')
     const uResolution = gl.getUniformLocation(program, 'u_resolution')
+    const uMouse = gl.getUniformLocation(program, 'u_mouse')
 
     gl.useProgram(program)
     gl.uniform1i(uAudio, 0)
@@ -82,6 +84,18 @@ export default function CircularWaveform({ getAudioData }: Props) {
     const texData = new Uint8Array(128)
     const smoothAudio = new Float32Array(128)
     smoothedAudioRef.current = smoothAudio
+
+    const onMouseMove = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      const aspect = rect.width / rect.height
+      mouseRef.current = {
+        x: ((e.clientX - rect.left) / rect.width * 2 - 1) * aspect,
+        y: -((e.clientY - rect.top) / rect.height * 2 - 1)
+      }
+    }
+    const onMouseLeave = () => { mouseRef.current = { x: -999, y: -999 } }
+    canvas.addEventListener('mousemove', onMouseMove)
+    canvas.addEventListener('mouseleave', onMouseLeave)
 
     function frame() {
       resizeCanvas(canvas)
@@ -126,6 +140,7 @@ export default function CircularWaveform({ getAudioData }: Props) {
       gl.uniform1f(uIntensity, 0.3 + smoothedIntensityRef.current * 3.0)
       gl.uniform1f(uPixelRatio, window.devicePixelRatio || 1)
       gl.uniform2f(uResolution, canvas.width, canvas.height)
+      gl.uniform2f(uMouse, mouseRef.current.x, mouseRef.current.y)
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
       rafRef.current = requestAnimationFrame(frame)
@@ -135,6 +150,8 @@ export default function CircularWaveform({ getAudioData }: Props) {
 
     return () => {
       cancelAnimationFrame(rafRef.current)
+      canvas.removeEventListener('mousemove', onMouseMove)
+      canvas.removeEventListener('mouseleave', onMouseLeave)
       gl.deleteProgram(program)
       gl.deleteShader(vs)
       gl.deleteShader(fs)
