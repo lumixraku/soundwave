@@ -42,3 +42,32 @@
   font-size: 13px;
   text-align: center;
 }
+
+.speaker-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.speaker-btn {
+  padding: 8px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(102, 192, 177, 0.25);
+  background: rgba(10, 30, 26, 0.6);
+  color: rgba(160, 220, 200, 0.7);
+  font-size: 13px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+
+.speaker-btn:hover {
+  border-color: rgba(102, 192, 177, 0.5);
+  color: #d8f3dc;
+}
+
+.speaker-btn.active {
+  background: rgba(38, 115, 97, 0.75);
+  border-color: rgba(102, 192, 177, 0.8);
+  color: #d8f3dc;
+  box-shadow: 0 0 14px rgba(102, 192, 177, 0.25);
+}
