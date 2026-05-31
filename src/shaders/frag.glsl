@@ -47,17 +47,30 @@ vec3 sampleColor(vec2 uv) {
   return texture(u_logo, logoSample(uv)).rgb;
 }
 
-// Signed distance to the logo silhouette in screen units.
-// Negative inside, positive outside, 0 on the boundary. Uses the padded SDF
-// texture so the wave's outer/inner contours don't clip on the texture rect.
-float logoSdf(vec2 uv) {
+// Look up the SDF *and* the parameter s of this pixel's nearest silhouette
+// point. Because every pixel along a normal shares the same parent, the
+// recovered s is constant along that normal — so when we drive a radial swing
+// by audio(s), the wave bump emerges perpendicular to the local tangent.
+struct LogoLookup { float sdf; float s; };
+
+LogoLookup logoLookup(vec2 uv) {
+  LogoLookup r;
   vec2 t = vec2(
     (uv.x / SDF_HALF_W) * 0.5 + 0.5,
     (-uv.y / SDF_HALF_H) * 0.5 + 0.5
   );
-  if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) return SDF_SCREEN_RANGE;
-  float packed = texture(u_logoSdf, t).r;
-  return (packed - 0.5) * 2.0 * SDF_SCREEN_RANGE;
+  if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) {
+    r.sdf = SDF_SCREEN_RANGE;
+    r.s   = 0.5;
+    return r;
+  }
+  vec4 data = texture(u_logoSdf, t);
+  r.sdf = (data.r - 0.5) * 2.0 * SDF_SCREEN_RANGE;
+  float cosA = (data.g - 0.5) * 2.0;
+  float sinA = (data.b - 0.5) * 2.0;
+  float angle = atan(sinA, cosA);            // -PI..PI
+  r.s = (angle + PI) / TAU;                  // 0..1 around the silhouette
+  return r;
 }
 
 void main() {
@@ -76,17 +89,17 @@ void main() {
   float mask = smoothstep(0.55, 0.92, thickness);
   vec3 ribbon = sampleColor(uv);
 
-  // Voice waveform traced perpendicular to the logo silhouette.
-  // s walks once around the silhouette via atan2 from origin (monotonic on the ∞ outline).
-  float theta = atan(uv.y, uv.x);
-  float s = fract((theta + PI) / TAU + u_time * 0.07);
+  // Voice waveform traced perpendicular to the logo silhouette. s is the
+  // angular parameter of the *nearest silhouette point*, so adjacent normal
+  // lines share s and the bumps come out along the local normal direction.
+  LogoLookup L = logoLookup(uv);
+  float s = fract(L.s + u_time * 0.07);
   float wavePoint = texture(u_audioData, vec2(s, 0.5)).r;
 
-  // Signed displacement around the silhouette — silence → wave hugs the edge,
-  // loud → wave swings ±WAVE_AMP perpendicular to the actual logo path.
+  // Signed displacement perpendicular to the silhouette — silence → wave hugs
+  // the edge, loud → wave swings ±WAVE_AMP along the local normal.
   float disp = (wavePoint - 0.5) * 2.0 * WAVE_AMP;
-  float sdf  = logoSdf(uv);
-  float waveDist = abs(sdf - disp);
+  float waveDist = abs(L.sdf - disp);
 
   float speakerGain = mix(u_gainLeft, u_gainRight, smoothstep(-0.04, 0.04, uv.x));
   float speakEnv   = clamp((u_intensity - 0.3) * 3.5, 0.0, 1.0);

@@ -40,15 +40,22 @@ function compileShader(gl: WebGL2RenderingContext, type: number, src: string) {
   return shader
 }
 
-// Chamfer 3x3 (Borgefors) distance transform — fast O(N), good-enough approximation
-// of the true Euclidean SDF for the logo silhouette. Negative inside, positive outside.
-function computeLogoSdf(inside: Uint8Array, w: number, h: number): Uint8Array {
+// Chamfer 3x3 (Borgefors) distance transform with parent tracking. For every
+// pixel we record (1) its signed distance to the silhouette and (2) the
+// silhouette pixel that is closest to it. Packing into RGBA8:
+//   R = signed distance (128 == on the edge, ±SDF_RANGE_PX maps to 0/255)
+//   G = cos(parentAngle) packed to [0,255]
+//   B = sin(parentAngle) packed to [0,255]
+// parentAngle is atan2 of the nearest silhouette pixel relative to the canvas
+// centre (world-y is flipped). Storing cos/sin lets the GPU's LINEAR filter
+// blend across the angle wrap at ±π without discontinuity.
+function computeLogoSdfRgba(inside: Uint8Array, w: number, h: number): Uint8Array {
   const D1 = 1.0
   const D2 = Math.SQRT2
   const INF = 1e9
   const dist = new Float32Array(w * h).fill(INF)
+  const parent = new Int32Array(w * h).fill(-1)
 
-  // Seed: boundary pixels (any pixel whose 4-neighbourhood crosses the silhouette).
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
@@ -57,43 +64,61 @@ function computeLogoSdf(inside: Uint8Array, w: number, h: number): Uint8Array {
                  (x < w - 1 && inside[i + 1] !== here) ||
                  (y > 0 && inside[i - w] !== here) ||
                  (y < h - 1 && inside[i + w] !== here)
-      if (ne) dist[i] = 0
+      if (ne) { dist[i] = 0; parent[i] = i }
+    }
+  }
+
+  const relax = (i: number, ni: number, inc: number) => {
+    const nd = dist[ni] + inc
+    if (nd < dist[i]) {
+      dist[i] = nd
+      parent[i] = parent[ni]
     }
   }
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
-      let d = dist[i]
       if (y > 0) {
-        if (x > 0)     d = Math.min(d, dist[i - w - 1] + D2)
-                       d = Math.min(d, dist[i - w]     + D1)
-        if (x < w - 1) d = Math.min(d, dist[i - w + 1] + D2)
+        if (x > 0)     relax(i, i - w - 1, D2)
+                       relax(i, i - w,     D1)
+        if (x < w - 1) relax(i, i - w + 1, D2)
       }
-      if (x > 0)       d = Math.min(d, dist[i - 1]     + D1)
-      dist[i] = d
+      if (x > 0)       relax(i, i - 1,     D1)
     }
   }
   for (let y = h - 1; y >= 0; y--) {
     for (let x = w - 1; x >= 0; x--) {
       const i = y * w + x
-      let d = dist[i]
-      if (x < w - 1)   d = Math.min(d, dist[i + 1]     + D1)
+      if (x < w - 1)   relax(i, i + 1,     D1)
       if (y < h - 1) {
-        if (x > 0)     d = Math.min(d, dist[i + w - 1] + D2)
-                       d = Math.min(d, dist[i + w]     + D1)
-        if (x < w - 1) d = Math.min(d, dist[i + w + 1] + D2)
+        if (x > 0)     relax(i, i + w - 1, D2)
+                       relax(i, i + w,     D1)
+        if (x < w - 1) relax(i, i + w + 1, D2)
       }
-      dist[i] = d
     }
   }
 
-  // Pack signed distance into R8: byte 128 == on the edge, 0 == far inside, 255 == far outside.
-  const packed = new Uint8Array(w * h)
+  const cx = w / 2, cy = h / 2
+  const packed = new Uint8Array(w * h * 4)
   for (let i = 0; i < w * h; i++) {
     const signed = inside[i] ? -dist[i] : dist[i]
     const v = Math.max(-1, Math.min(1, signed / SDF_RANGE_PX))
-    packed[i] = Math.round((v * 0.5 + 0.5) * 255)
+    packed[i * 4] = Math.round((v * 0.5 + 0.5) * 255)
+
+    const p = parent[i]
+    let cosA = 1, sinA = 0
+    if (p >= 0) {
+      const px = p % w
+      const py = (p - px) / w
+      // Canvas y is top-down; world y is bottom-up — flip when computing angle.
+      const angle = Math.atan2(-(py - cy), px - cx)
+      cosA = Math.cos(angle)
+      sinA = Math.sin(angle)
+    }
+    packed[i * 4 + 1] = Math.round((cosA * 0.5 + 0.5) * 255)
+    packed[i * 4 + 2] = Math.round((sinA * 0.5 + 0.5) * 255)
+    packed[i * 4 + 3] = 255
   }
   return packed
 }
@@ -125,7 +150,7 @@ function rasterizeSvg(url: string): Promise<{ bmp: HTMLCanvasElement; sdf: Uint8
       const px = sdfCtx.getImageData(0, 0, SDF_TEX_W, SDF_TEX_H).data
       const inside = new Uint8Array(SDF_TEX_W * SDF_TEX_H)
       for (let i = 0; i < inside.length; i++) inside[i] = px[i * 4 + 3] > 128 ? 1 : 0
-      const sdf = computeLogoSdf(inside, SDF_TEX_W, SDF_TEX_H)
+      const sdf = computeLogoSdfRgba(inside, SDF_TEX_W, SDF_TEX_H)
 
       resolve({ bmp: off, sdf })
     }
@@ -188,8 +213,10 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]))
 
-    // Texture 2: signed distance field of the logo silhouette (R8, 128 == on the edge).
-    // The wave's centerline is the SDF == 0 contour, so the wave traces the real logo path.
+    // Texture 2: RGBA8 — R: signed distance to the silhouette; G,B: cos/sin of the
+    // angle of the NEAREST silhouette point (relative to canvas centre). All pixels
+    // sharing a silhouette parent share the same angle, so the wave bumps come out
+    // perpendicular to the local tangent instead of radial from the origin.
     const sdfTex = gl.createTexture()!
     gl.activeTexture(gl.TEXTURE2)
     gl.bindTexture(gl.TEXTURE_2D, sdfTex)
@@ -197,7 +224,7 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]))
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 128, 128, 255]))
 
     let cancelled = false
     rasterizeSvg(LOGO_URL).then(({ bmp, sdf }) => {
@@ -209,8 +236,8 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
 
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, sdfTex)
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, SDF_TEX_W, SDF_TEX_H, 0, gl.RED, gl.UNSIGNED_BYTE, sdf)
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, SDF_TEX_W, SDF_TEX_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, sdf)
     }).catch(err => {
       if (!cancelled) console.error('Failed to load logo SVG:', err)
     })
