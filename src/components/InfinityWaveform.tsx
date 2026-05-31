@@ -5,8 +5,7 @@ import fragSrc from '../shaders/frag.glsl?raw'
 const LOGO_URL = '/infinity.svg'
 const LOGO_TEX_W = 1024
 const LOGO_TEX_H = Math.round(LOGO_TEX_W * (19 / 35))   // viewBox aspect
-
-function clamp01(v: number) { return v < 0 ? 0 : v > 1 ? 1 : v }
+const SDF_RANGE_PX = 256   // ±range packed into the R8 SDF texture (must stay in sync with shader)
 
 interface Props {
   getAudioData: () => Uint8Array
@@ -36,7 +35,65 @@ function compileShader(gl: WebGL2RenderingContext, type: number, src: string) {
   return shader
 }
 
-function rasterizeSvgToCanvas(url: string): Promise<HTMLCanvasElement> {
+// Chamfer 3x3 (Borgefors) distance transform — fast O(N), good-enough approximation
+// of the true Euclidean SDF for the logo silhouette. Negative inside, positive outside.
+function computeLogoSdf(inside: Uint8Array, w: number, h: number): Uint8Array {
+  const D1 = 1.0
+  const D2 = Math.SQRT2
+  const INF = 1e9
+  const dist = new Float32Array(w * h).fill(INF)
+
+  // Seed: boundary pixels (any pixel whose 4-neighbourhood crosses the silhouette).
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const here = inside[i]
+      const ne = (x > 0 && inside[i - 1] !== here) ||
+                 (x < w - 1 && inside[i + 1] !== here) ||
+                 (y > 0 && inside[i - w] !== here) ||
+                 (y < h - 1 && inside[i + w] !== here)
+      if (ne) dist[i] = 0
+    }
+  }
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      let d = dist[i]
+      if (y > 0) {
+        if (x > 0)     d = Math.min(d, dist[i - w - 1] + D2)
+                       d = Math.min(d, dist[i - w]     + D1)
+        if (x < w - 1) d = Math.min(d, dist[i - w + 1] + D2)
+      }
+      if (x > 0)       d = Math.min(d, dist[i - 1]     + D1)
+      dist[i] = d
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x
+      let d = dist[i]
+      if (x < w - 1)   d = Math.min(d, dist[i + 1]     + D1)
+      if (y < h - 1) {
+        if (x > 0)     d = Math.min(d, dist[i + w - 1] + D2)
+                       d = Math.min(d, dist[i + w]     + D1)
+        if (x < w - 1) d = Math.min(d, dist[i + w + 1] + D2)
+      }
+      dist[i] = d
+    }
+  }
+
+  // Pack signed distance into R8: byte 128 == on the edge, 0 == far inside, 255 == far outside.
+  const packed = new Uint8Array(w * h)
+  for (let i = 0; i < w * h; i++) {
+    const signed = inside[i] ? -dist[i] : dist[i]
+    const v = Math.max(-1, Math.min(1, signed / SDF_RANGE_PX))
+    packed[i] = Math.round((v * 0.5 + 0.5) * 255)
+  }
+  return packed
+}
+
+function rasterizeSvg(url: string): Promise<{ bmp: HTMLCanvasElement; sdf: Uint8Array }> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
@@ -47,7 +104,13 @@ function rasterizeSvgToCanvas(url: string): Promise<HTMLCanvasElement> {
       const ctx = off.getContext('2d')!
       ctx.clearRect(0, 0, LOGO_TEX_W, LOGO_TEX_H)
       ctx.drawImage(img, 0, 0, LOGO_TEX_W, LOGO_TEX_H)
-      resolve(off)
+
+      const px = ctx.getImageData(0, 0, LOGO_TEX_W, LOGO_TEX_H).data
+      const inside = new Uint8Array(LOGO_TEX_W * LOGO_TEX_H)
+      for (let i = 0; i < inside.length; i++) inside[i] = px[i * 4 + 3] > 128 ? 1 : 0
+      const sdf = computeLogoSdf(inside, LOGO_TEX_W, LOGO_TEX_H)
+
+      resolve({ bmp: off, sdf })
     }
     img.onerror = reject
     img.src = url
@@ -108,13 +171,29 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]))
 
+    // Texture 2: signed distance field of the logo silhouette (R8, 128 == on the edge).
+    // The wave's centerline is the SDF == 0 contour, so the wave traces the real logo path.
+    const sdfTex = gl.createTexture()!
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, sdfTex)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 1, 1, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array([255]))
+
     let cancelled = false
-    rasterizeSvgToCanvas(LOGO_URL).then((bmp) => {
+    rasterizeSvg(LOGO_URL).then(({ bmp, sdf }) => {
       if (cancelled) return
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, logoTex)
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp)
+
+      gl.activeTexture(gl.TEXTURE2)
+      gl.bindTexture(gl.TEXTURE_2D, sdfTex)
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, LOGO_TEX_W, LOGO_TEX_H, 0, gl.RED, gl.UNSIGNED_BYTE, sdf)
     }).catch(err => {
       if (!cancelled) console.error('Failed to load logo SVG:', err)
     })
@@ -122,6 +201,7 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
     const uTime       = gl.getUniformLocation(program, 'u_time')
     const uAudio      = gl.getUniformLocation(program, 'u_audioData')
     const uLogo       = gl.getUniformLocation(program, 'u_logo')
+    const uLogoSdf    = gl.getUniformLocation(program, 'u_logoSdf')
     const uIntensity  = gl.getUniformLocation(program, 'u_intensity')
     const uGainLeft   = gl.getUniformLocation(program, 'u_gainLeft')
     const uGainRight  = gl.getUniformLocation(program, 'u_gainRight')
@@ -132,10 +212,10 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
     gl.useProgram(program)
     gl.uniform1i(uAudio, 0)
     gl.uniform1i(uLogo, 1)
+    gl.uniform1i(uLogoSdf, 2)
 
     const startTime = performance.now()
     const texData = new Uint8Array(128)
-    const smoothAudio = new Float32Array(128)
 
     const onMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect()
@@ -153,35 +233,22 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
       resizeCanvas(canvas)
       gl.viewport(0, 0, canvas.width, canvas.height)
 
+      // Time-domain waveform: byte 128 == silence, 0/255 == max negative/positive swing.
+      // Downsample 256 → 128 with a 3-tap smoothing so we don't alias single samples.
       const rawData = getAudioData()
-      const len = rawData.length
+      const step = rawData.length / 128
+      let sumSq = 0
       for (let i = 0; i < 128; i++) {
-        const idx = Math.floor((i / 128) * len)
-        const v = rawData[idx] / 255
-        smoothAudio[i] += (v - smoothAudio[i]) * 0.18
+        const j = Math.floor(i * step)
+        const prev = rawData[Math.max(0, j - 1)]
+        const curr = rawData[j]
+        const next = rawData[Math.min(rawData.length - 1, j + 1)]
+        texData[i] = Math.round((prev + curr * 2 + next) / 4)
+        const centered = (curr - 128) / 128
+        sumSq += centered * centered
       }
-
-      let sum = 0
-      for (let i = 0; i < 128; i++) sum += smoothAudio[i]
-      const avgIntensity = sum / 128
-      smoothedIntensityRef.current += (avgIntensity - smoothedIntensityRef.current) * 0.15
-
-      const N = 128
-      const half = N / 2
-      const mirrored = new Float32Array(N)
-      for (let i = 0; i < N; i++) {
-        mirrored[i] = i < half ? smoothAudio[half - 1 - i] : smoothAudio[i - half]
-      }
-      const blurred = new Float32Array(N)
-      for (let i = 0; i < N; i++) {
-        const prev = mirrored[(i - 1 + N) % N]
-        const curr = mirrored[i]
-        const next = mirrored[(i + 1) % N]
-        blurred[i] = prev * 0.25 + curr * 0.5 + next * 0.25
-      }
-      for (let i = 0; i < N; i++) {
-        texData[i] = Math.floor(clamp01(blurred[i]) * 255)
-      }
+      const rms = Math.sqrt(sumSq / 128)
+      smoothedIntensityRef.current += (rms - smoothedIntensityRef.current) * 0.2
 
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, audioTex)
@@ -189,7 +256,7 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
 
       const elapsed = (performance.now() - startTime) / 1000
       gl.uniform1f(uTime, elapsed)
-      gl.uniform1f(uIntensity, 0.3 + smoothedIntensityRef.current * 3.0)
+      gl.uniform1f(uIntensity, 0.3 + smoothedIntensityRef.current * 6.0)
       gl.uniform1f(uGainLeft, gainRef.current.left)
       gl.uniform1f(uGainRight, gainRef.current.right)
       gl.uniform1f(uPixelRatio, window.devicePixelRatio || 1)
@@ -213,6 +280,7 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
       gl.deleteBuffer(vbo)
       gl.deleteTexture(audioTex)
       gl.deleteTexture(logoTex)
+      gl.deleteTexture(sdfTex)
     }
   }, [getAudioData])
 

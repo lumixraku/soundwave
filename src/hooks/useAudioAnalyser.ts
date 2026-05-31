@@ -6,7 +6,7 @@ export function useAudioAnalyser() {
   const ctxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const dataRef = useRef<Uint8Array>(new Uint8Array(FFT_SIZE / 2))
+  const dataRef = useRef<Uint8Array>(new Uint8Array(FFT_SIZE).fill(128))
   const activeRef = useRef(false)
 
   const start = useCallback(async () => {
@@ -23,7 +23,7 @@ export function useAudioAnalyser() {
     ctxRef.current = ctx
     analyserRef.current = analyser
     streamRef.current = stream
-    dataRef.current = new Uint8Array(analyser.frequencyBinCount)
+    dataRef.current = new Uint8Array(analyser.fftSize).fill(128)
     activeRef.current = true
   }, [])
 
@@ -33,13 +33,13 @@ export function useAudioAnalyser() {
     ctxRef.current = null
     analyserRef.current = null
     streamRef.current = null
-    dataRef.current = new Uint8Array(FFT_SIZE / 2)
+    dataRef.current = new Uint8Array(FFT_SIZE).fill(128)
     activeRef.current = false
   }, [])
 
   const getAudioData = useCallback(() => {
     if (analyserRef.current) {
-      analyserRef.current.getByteFrequencyData(dataRef.current)
+      analyserRef.current.getByteTimeDomainData(dataRef.current)
     }
     return dataRef.current
   }, [])
