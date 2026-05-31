@@ -11,6 +11,8 @@ uniform float u_gainRight;
 uniform float u_pixelRatio;
 uniform vec2  u_resolution;
 uniform vec2  u_mouse;
+uniform vec2  u_logoHalf;   // screen half-extent of the colour texture
+uniform vec2  u_sdfHalf;    // screen half-extent of the (padded) SDF texture
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -18,11 +20,6 @@ out vec4 fragColor;
 #define TAU 6.28318530718
 #define PI  3.14159265359
 
-const float LOGO_HALF_W = 0.45;
-const float LOGO_HALF_H = LOGO_HALF_W * (19.0 / 35.0);
-const float SDF_SCALE   = 1.5;   // SDF texture covers 1.5x the logo bbox — must match JS
-const float SDF_HALF_W  = LOGO_HALF_W * SDF_SCALE;
-const float SDF_HALF_H  = LOGO_HALF_H * SDF_SCALE;
 const float ERODE_R     = 0.014;
 const float WAVE_AMP    = 0.07;  // peak signed swing of the voice waveform off the logo edge
 
@@ -32,8 +29,8 @@ const float SDF_SCREEN_RANGE = 0.225;
 
 vec2 logoSample(vec2 uv) {
   return vec2(
-    (uv.x / LOGO_HALF_W) * 0.5 + 0.5,
-    (-uv.y / LOGO_HALF_H) * 0.5 + 0.5
+    (uv.x / u_logoHalf.x) * 0.5 + 0.5,
+    (-uv.y / u_logoHalf.y) * 0.5 + 0.5
   );
 }
 
@@ -56,8 +53,8 @@ struct LogoLookup { float sdf; float s; };
 LogoLookup logoLookup(vec2 uv) {
   LogoLookup r;
   vec2 t = vec2(
-    (uv.x / SDF_HALF_W) * 0.5 + 0.5,
-    (-uv.y / SDF_HALF_H) * 0.5 + 0.5
+    (uv.x / u_sdfHalf.x) * 0.5 + 0.5,
+    (-uv.y / u_sdfHalf.y) * 0.5 + 0.5
   );
   if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) {
     r.sdf = SDF_SCREEN_RANGE;

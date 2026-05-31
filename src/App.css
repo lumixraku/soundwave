@@ -71,3 +71,25 @@
   color: #d8f3dc;
   box-shadow: 0 0 14px rgba(102, 192, 177, 0.25);
 }
+
+.logo-tools {
+  display: flex;
+  gap: 8px;
+}
+
+.logo-btn {
+  padding: 6px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(102, 192, 177, 0.25);
+  background: rgba(10, 30, 26, 0.6);
+  color: rgba(160, 220, 200, 0.7);
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+
+.logo-btn:hover {
+  border-color: rgba(102, 192, 177, 0.5);
+  color: #d8f3dc;
+}
