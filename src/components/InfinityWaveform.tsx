@@ -6,6 +6,11 @@ const LOGO_URL = '/infinity.svg'
 const LOGO_TEX_W = 1024
 const LOGO_TEX_H = Math.round(LOGO_TEX_W * (19 / 35))   // viewBox aspect
 const SDF_RANGE_PX = 256   // ±range packed into the R8 SDF texture (must stay in sync with shader)
+const SDF_SCALE = 1.5      // SDF texture covers this much of the logo bounding box (padding for the wave to swing into — keep in sync with shader)
+const SDF_TEX_W = Math.round(LOGO_TEX_W * SDF_SCALE)
+const SDF_TEX_H = Math.round(LOGO_TEX_H * SDF_SCALE)
+const SDF_PAD_X = Math.round((SDF_TEX_W - LOGO_TEX_W) / 2)
+const SDF_PAD_Y = Math.round((SDF_TEX_H - LOGO_TEX_H) / 2)
 
 interface Props {
   getAudioData: () => Uint8Array
@@ -98,6 +103,7 @@ function rasterizeSvg(url: string): Promise<{ bmp: HTMLCanvasElement; sdf: Uint8
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = () => {
+      // Color texture: logo fills the canvas (used for the ribbon body).
       const off = document.createElement('canvas')
       off.width = LOGO_TEX_W
       off.height = LOGO_TEX_H
@@ -105,10 +111,21 @@ function rasterizeSvg(url: string): Promise<{ bmp: HTMLCanvasElement; sdf: Uint8
       ctx.clearRect(0, 0, LOGO_TEX_W, LOGO_TEX_H)
       ctx.drawImage(img, 0, 0, LOGO_TEX_W, LOGO_TEX_H)
 
-      const px = ctx.getImageData(0, 0, LOGO_TEX_W, LOGO_TEX_H).data
-      const inside = new Uint8Array(LOGO_TEX_W * LOGO_TEX_H)
+      // SDF source: logo centred on a larger padded canvas so the SDF carries
+      // accurate distance values for the region around the logo (where the
+      // voice waveform swings into). Without padding the contour gets clipped
+      // at the texture rectangle and shows up as a square halo on screen.
+      const sdfCanvas = document.createElement('canvas')
+      sdfCanvas.width = SDF_TEX_W
+      sdfCanvas.height = SDF_TEX_H
+      const sdfCtx = sdfCanvas.getContext('2d')!
+      sdfCtx.clearRect(0, 0, SDF_TEX_W, SDF_TEX_H)
+      sdfCtx.drawImage(img, SDF_PAD_X, SDF_PAD_Y, LOGO_TEX_W, LOGO_TEX_H)
+
+      const px = sdfCtx.getImageData(0, 0, SDF_TEX_W, SDF_TEX_H).data
+      const inside = new Uint8Array(SDF_TEX_W * SDF_TEX_H)
       for (let i = 0; i < inside.length; i++) inside[i] = px[i * 4 + 3] > 128 ? 1 : 0
-      const sdf = computeLogoSdf(inside, LOGO_TEX_W, LOGO_TEX_H)
+      const sdf = computeLogoSdf(inside, SDF_TEX_W, SDF_TEX_H)
 
       resolve({ bmp: off, sdf })
     }
@@ -193,7 +210,7 @@ export default function InfinityWaveform({ getAudioData, gainLeft, gainRight }: 
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, sdfTex)
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, LOGO_TEX_W, LOGO_TEX_H, 0, gl.RED, gl.UNSIGNED_BYTE, sdf)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, SDF_TEX_W, SDF_TEX_H, 0, gl.RED, gl.UNSIGNED_BYTE, sdf)
     }).catch(err => {
       if (!cancelled) console.error('Failed to load logo SVG:', err)
     })

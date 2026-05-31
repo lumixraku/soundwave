@@ -20,10 +20,14 @@ out vec4 fragColor;
 
 const float LOGO_HALF_W = 0.45;
 const float LOGO_HALF_H = LOGO_HALF_W * (19.0 / 35.0);
+const float SDF_SCALE   = 1.5;   // SDF texture covers 1.5x the logo bbox — must match JS
+const float SDF_HALF_W  = LOGO_HALF_W * SDF_SCALE;
+const float SDF_HALF_H  = LOGO_HALF_H * SDF_SCALE;
 const float ERODE_R     = 0.014;
 const float WAVE_AMP    = 0.07;  // peak signed swing of the voice waveform off the logo edge
 
-// 256 px (SDF_RANGE_PX) × (LOGO_HALF_W * 2 / LOGO_TEX_W) = 256 / 1024 * 0.9 = 0.225
+// SDF byte range: ±SDF_RANGE_PX texture pixels. Texture pixel pitch is identical
+// to the original logo's (the SDF canvas is just padded), so 256 px ≈ 0.225 screen units.
 const float SDF_SCREEN_RANGE = 0.225;
 
 vec2 logoSample(vec2 uv) {
@@ -44,9 +48,13 @@ vec3 sampleColor(vec2 uv) {
 }
 
 // Signed distance to the logo silhouette in screen units.
-// Negative inside, positive outside, 0 on the boundary.
+// Negative inside, positive outside, 0 on the boundary. Uses the padded SDF
+// texture so the wave's outer/inner contours don't clip on the texture rect.
 float logoSdf(vec2 uv) {
-  vec2 t = logoSample(uv);
+  vec2 t = vec2(
+    (uv.x / SDF_HALF_W) * 0.5 + 0.5,
+    (-uv.y / SDF_HALF_H) * 0.5 + 0.5
+  );
   if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) return SDF_SCREEN_RANGE;
   float packed = texture(u_logoSdf, t).r;
   return (packed - 0.5) * 2.0 * SDF_SCREEN_RANGE;
