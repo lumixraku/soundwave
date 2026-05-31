@@ -74,7 +74,7 @@ void main() {
   vec2 uv = v_uv * 2.0 - 1.0;
   uv.x *= u_resolution.x / u_resolution.y;
 
-  // Trooly ribbon body — slightly eroded so the ring sits cleanly around the silhouette.
+  // Logo body — slightly eroded so the wave sits cleanly around the silhouette.
   float thickness = 0.0;
   const int EN = 8;
   for (int i = 0; i < EN; i++) {
