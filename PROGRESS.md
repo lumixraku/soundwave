@@ -1,6 +1,6 @@
 # Progress
 
-ShaderWave 的迭代历程。
+SoundWave 的迭代历程。
 
 ## 已完成
 

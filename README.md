@@ -1,10 +1,12 @@
-# ShaderWave
+# SoundWave
 
-基于 WebGL2 的实时音频可视化。麦克风采到的语音波形沿任意 logo 的真实轮廓展开 —— 静音时波形精确贴着 logo 边缘，发声时按时域音压沿轮廓法线方向上下起伏。
+基于 WebGL2 的实时音频可视化。**任意 logo 都能拥有音波效果** —— 上传任意图片，麦克风采到的语音波形会沿该 logo 的真实轮廓展开：静音时波形精确贴着 logo 边缘，发声时按时域音压沿轮廓法线方向上下起伏。
+
+![SoundWave 效果展示](./public/effect.jpg)
 
 ## 特性
 
-- **任意 logo 支持**：上传 PNG/JPG/SVG/WebP，运行时光栅化 + 提取 silhouette；带 alpha 的图直接用 alpha 通道，纯色背景图用四角亮度自动判背景明暗后做阈值
+- **任意 logo → 音波轮廓**：上传 PNG/JPG/SVG/WebP，运行时光栅化 + 提取 silhouette，立即把语音波形包裹到任何形状上；带 alpha 的图直接用 alpha 通道，纯色背景图用四角亮度自动判背景明暗后做阈值
 - **真·形状感**：CPU 端跑 Chamfer 3×3 距离变换 + parent 追踪，得到每个像素到 logo 轮廓的 SDF + 最近轮廓点的角度参数，烘焙成 RGBA8 贴图供 shader 实时采样
 - **音波沿法线**：所有像素沿同一条法线共享同一个角度参数 `s`，音频 `audio(s)` 推动 `disp` 偏移 → 波形鼓包**垂直于切线**而非歪斜径向
 - **时域波形而非频谱**：用 `getByteTimeDomainData` 拿到带正负的真实声压，避免频谱"中心扩散"感
@@ -38,7 +40,8 @@ npm run preview
 ```
 public/
 ├── languages.svg                 默认 logo（可在 UI 上传任意图片替换）
-└── infinity.svg                  备用 logo
+├── infinity.svg                  备用 logo
+└── effect.jpg                    效果展示图
 src/
 ├── App.tsx                       入口：麦克风开关 + speaker 模式 + logo 上传
 ├── App.css
